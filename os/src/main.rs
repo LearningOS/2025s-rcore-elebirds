@@ -39,6 +39,10 @@ pub fn clear_bss() {
 /// the rust entry-point of os
 #[no_mangle]
 pub fn rust_main() -> ! {
+    /* 使用extern "C"声明的函数导入了由链接器提供的外部符号。
+    这些函数本质上只是一个地址，所以通过`as usize`可以直接获取地址的值。
+    通过这种方式获取各段的起始地址和结束地址，避免了麻烦的指针解引用操作。
+     */
     extern "C" {
         fn stext(); // begin addr of text segment
         fn etext(); // end addr of text segment
