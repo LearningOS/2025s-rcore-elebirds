@@ -14,11 +14,15 @@ mod switch;
 #[allow(clippy::module_inception)]
 mod task;
 
+use core::cell::RefMut;
+
 use crate::config::MAX_APP_NUM;
 use crate::loader::{get_num_app, init_app_cx};
+use crate::syscall::SYSCALL_COUNT;
 use crate::sync::UPSafeCell;
 use lazy_static::*;
 use switch::__switch;
+use task::SyscallStats;
 pub use task::{TaskControlBlock, TaskStatus};
 
 pub use context::TaskContext;
@@ -54,6 +58,7 @@ lazy_static! {
         let mut tasks = [TaskControlBlock {
             task_cx: TaskContext::zero_init(),
             task_status: TaskStatus::UnInit,
+            syscall_stats: [SyscallStats::new(0); SYSCALL_COUNT],
         }; MAX_APP_NUM];
         for (i, task) in tasks.iter_mut().enumerate() {
             task.task_cx = TaskContext::goto_restore(init_app_cx(i));
@@ -92,16 +97,12 @@ impl TaskManager {
 
     /// Change the status of current `Running` task into `Ready`.
     fn mark_current_suspended(&self) {
-        let mut inner = self.inner.exclusive_access();
-        let current = inner.current_task;
-        inner.tasks[current].task_status = TaskStatus::Ready;
+        self.get_current_task().task_status = TaskStatus::Ready;
     }
 
     /// Change the status of current `Running` task into `Exited`.
     fn mark_current_exited(&self) {
-        let mut inner = self.inner.exclusive_access();
-        let current = inner.current_task;
-        inner.tasks[current].task_status = TaskStatus::Exited;
+        self.get_current_task().task_status = TaskStatus::Exited;
     }
 
     /// Find next task to run and return task id.
@@ -134,6 +135,12 @@ impl TaskManager {
         } else {
             panic!("All applications completed!");
         }
+    }
+
+    fn get_current_task(&self) -> RefMut<'_, TaskControlBlock> {
+        let inner = self.inner.exclusive_access(); // 获取内部可变引用
+        let id = inner.current_task; // 获取当前任务的 id
+        RefMut::map(inner, |inner| &mut inner.tasks[id]) // 返回当前任务的可变引用
     }
 }
 
@@ -168,4 +175,38 @@ pub fn suspend_current_and_run_next() {
 pub fn exit_current_and_run_next() {
     mark_current_exited();
     run_next_task();
+}
+
+/// 获取当前任务调用编号为 `id` 的系统调用次数存储位置，或设定一个位置
+fn get_syscall_count_inner_id(syscall_id: usize) -> usize {
+    for (i, ele) in TASK_MANAGER.get_current_task().syscall_stats.iter_mut().enumerate() {
+        match ele.syscall_id {
+            0 => {
+                ele.syscall_id = syscall_id;
+                return i;
+            }
+            id if id == syscall_id => return i,
+            _ => {}
+        }
+    }
+    panic!("syscall_stats overflow, maybe you need to enlarge SYSCALL_COUNT? or an unexpected syscall_id: {}", syscall_id);
+}
+
+/// 获取当前任务调用编号为 `id` 的系统调用的次数，包括本次调用
+pub fn get_syscall_count(syscall_id: usize) -> usize {
+    let id = get_syscall_count_inner_id(syscall_id);
+    let count = TASK_MANAGER.get_current_task().syscall_stats[id].count;
+    trace!(
+        "[SyscallCount] get: syscall_id: {}, count: {}",
+        syscall_id,
+        count
+    );
+    count
+}
+
+/// 增加当前任务调用编号为 `id` 的系统调用的次数
+pub fn add_syscall_count(syscall_id: usize) {
+    let id = get_syscall_count_inner_id(syscall_id);
+    trace!("[SyscallCount] add: syscall_id: {}", syscall_id);
+    TASK_MANAGER.get_current_task().syscall_stats[id].count += 1;
 }
