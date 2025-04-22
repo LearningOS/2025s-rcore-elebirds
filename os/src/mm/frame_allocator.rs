@@ -99,7 +99,7 @@ pub fn init_frame_allocator() {
         fn ekernel();
     }
     FRAME_ALLOCATOR.exclusive_access().init(
-        PhysAddr::from(ekernel as usize).ceil(),
+        PhysAddr::from(ekernel as usize).ceil(), // ekernel可能没有对齐，保证从下一个完整的页开始分配
         PhysAddr::from(MEMORY_END).floor(),
     );
 }

@@ -14,6 +14,8 @@ mod switch;
 #[allow(clippy::module_inception)]
 mod task;
 
+use core::cell::RefMut;
+
 use crate::loader::{get_app_data, get_num_app};
 use crate::sync::UPSafeCell;
 use crate::trap::TrapContext;
@@ -152,6 +154,25 @@ impl TaskManager {
         } else {
             panic!("All applications completed!");
         }
+    }
+
+    /// Get the current task's `TaskControlBlock` reference.
+    pub fn get_current_task(&self) -> RefMut<'_, TaskControlBlock> {
+        let inner = self.inner.exclusive_access(); // 获取内部可变引用
+        let id = inner.current_task; // 获取当前任务的 id
+        RefMut::map(inner, |inner| &mut inner.tasks[id]) // 返回当前任务的可变引用
+    }
+
+    /// Get the syscall count of current task
+    pub fn get_syscall_count(&self, id: usize) -> usize {
+        self.get_current_task().syscall_stats[id]
+    }
+
+    /// Add syscall count of current task
+    pub fn add_syscall_count(&self, id: usize) {
+        let mut inner = self.inner.exclusive_access();
+        let cur = inner.current_task;
+        inner.tasks[cur].syscall_stats[id] += 1;
     }
 }
 

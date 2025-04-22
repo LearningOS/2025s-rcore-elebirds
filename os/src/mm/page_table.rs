@@ -43,6 +43,8 @@ impl PageTableEntry {
         }
     }
     /// Create an empty page table entry
+    /// 
+    /// 隐含Valid位为0，表示不合法
     pub fn empty() -> Self {
         PageTableEntry { bits: 0 }
     }
@@ -69,6 +71,10 @@ impl PageTableEntry {
     /// The page pointered by page table entry is executable?
     pub fn executable(&self) -> bool {
         (self.flags() & PTEFlags::X) != PTEFlags::empty()
+    }
+    /// The page pointered by page table entry is user accessible?
+    pub fn user(&self) -> bool {
+        (self.flags() & PTEFlags::U) != PTEFlags::empty()
     }
 }
 
@@ -178,4 +184,22 @@ pub fn translated_byte_buffer(token: usize, ptr: *const u8, len: usize) -> Vec<&
         start = end_va.into();
     }
     v
+}
+
+/// Copy data from src to dst, considering the situation that dst on multiple pages
+pub fn copy_buffer(
+    dst: Vec<&mut [u8]>,
+    src: &[u8],
+    len: usize
+) -> usize {
+    let mut writen_len = 0;
+    for ele in dst {
+        let wlen = ele.len().min(len - writen_len);
+        if wlen == 0 {
+            break;
+        }
+        ele[..wlen].copy_from_slice(&src[writen_len..writen_len + wlen]);
+        writen_len += wlen;
+    }
+    writen_len
 }

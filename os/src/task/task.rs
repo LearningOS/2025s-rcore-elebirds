@@ -1,6 +1,6 @@
 //! Types related to task management
 use super::TaskContext;
-use crate::config::TRAP_CONTEXT_BASE;
+use crate::config::{MAX_SYSCALL_NUM, TRAP_CONTEXT_BASE};
 use crate::mm::{
     kernel_stack_position, MapPermission, MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE,
 };
@@ -28,6 +28,9 @@ pub struct TaskControlBlock {
 
     /// Program break
     pub program_brk: usize,
+
+    /// Trace of number of each syscall
+    pub syscall_stats: [usize; MAX_SYSCALL_NUM],
 }
 
 impl TaskControlBlock {
@@ -63,6 +66,7 @@ impl TaskControlBlock {
             base_size: user_sp,
             heap_bottom: user_sp,
             program_brk: user_sp,
+            syscall_stats: [0; MAX_SYSCALL_NUM],
         };
         // prepare TrapContext in user space
         let trap_cx = task_control_block.get_trap_cx();
@@ -95,6 +99,26 @@ impl TaskControlBlock {
         } else {
             None
         }
+    }
+    /// Request a memory area
+    pub fn request_mem_area(&mut self, start: usize, size: usize, prot: usize) -> bool {
+        let start_va = VirtAddr::from(start);
+        let end_va = VirtAddr::from(start + size);
+        if self.memory_set.has_overlap(start_va, end_va) {
+            false
+        }else {
+            let permission = 
+                MapPermission::from_bits_truncate((prot as u8 & 0b111) << 1) | 
+                MapPermission::U;
+            debug!("kernel: request_mem_area: start: {:#x}, size: {:#x}, permission: {:#b}", start, size, permission);
+            self.memory_set.insert_framed_area(start_va, end_va, permission);
+            true
+        }
+    }
+
+    /// Delete a memory area that exists in the current process
+    pub fn delete_mem_area(&mut self, start: usize, size: usize) -> bool {
+        return self.memory_set.unmap_area(VirtAddr::from(start).floor(), VirtAddr::from(start + size).ceil());
     }
 }
 

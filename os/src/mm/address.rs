@@ -100,6 +100,7 @@ impl VirtAddr {
     }
 
     /// Get the (ceil) virtual page number
+    /// 可能未取整，通过ceil找到一个完整的页
     pub fn ceil(&self) -> VirtPageNum {
         VirtPageNum((self.0 - 1 + PAGE_SIZE) / PAGE_SIZE)
     }
@@ -191,6 +192,10 @@ impl PhysPageNum {
         let pa: PhysAddr = (*self).into();
         pa.get_mut()
     }
+    /// Combine the physical page number and offset to get the physical address
+    pub fn get_phys_addr(&self, offset: usize) -> PhysAddr {
+        PhysAddr(self.0 << PAGE_SIZE_BITS | (offset & (PAGE_SIZE - 1)))
+    }
 }
 
 /// iterator for phy/virt page number
@@ -271,3 +276,13 @@ where
 }
 /// a simple range structure for virtual page number
 pub type VPNRange = SimpleRange<VirtPageNum>;
+
+impl VPNRange {
+    pub fn is_same(&self, other: &Self) -> bool {
+        self.l == other.l && self.r == other.r
+    }
+
+    pub fn is_overlap(&self, other: &Self) -> bool {
+        self.l < other.r && self.r > other.l
+    }
+}
