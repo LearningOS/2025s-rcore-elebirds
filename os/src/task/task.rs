@@ -2,7 +2,7 @@
 use super::TaskContext;
 use super::{kstack_alloc, pid_alloc, KernelStack, PidHandle};
 use crate::config::TRAP_CONTEXT_BASE;
-use crate::mm::{MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE};
+use crate::mm::{MapPermission, MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE};
 use crate::sync::UPSafeCell;
 use crate::trap::{trap_handler, TrapContext};
 use alloc::sync::{Arc, Weak};
@@ -84,6 +84,26 @@ impl TaskControlBlockInner {
     }
     pub fn is_zombie(&self) -> bool {
         self.get_status() == TaskStatus::Zombie
+    }
+    /// Request a memory area
+    pub fn request_mem_area(&mut self, start: usize, size: usize, prot: usize) -> bool {
+        let start_va = VirtAddr::from(start);
+        let end_va = VirtAddr::from(start + size);
+        if self.memory_set.has_overlap(start_va, end_va) {
+            false
+        }else {
+            let permission = 
+                MapPermission::from_bits_truncate((prot as u8 & 0b111) << 1) | 
+                MapPermission::U;
+            debug!("kernel: request_mem_area: start: {:#x}, size: {:#x}, permission: {:#b}", start, size, permission);
+            self.memory_set.insert_framed_area(start_va, end_va, permission);
+            true
+        }
+    }
+
+    /// Delete a memory area that exists in the current process
+    pub fn delete_mem_area(&mut self, start: usize, size: usize) -> bool {
+        return self.memory_set.unmap_area(VirtAddr::from(start).floor(), VirtAddr::from(start + size).ceil());
     }
 }
 
