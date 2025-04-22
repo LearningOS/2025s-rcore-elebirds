@@ -110,6 +110,7 @@ impl TaskControlBlock {
             let permission = 
                 MapPermission::from_bits_truncate((prot as u8 & 0b111) << 1) | 
                 MapPermission::U;
+            debug!("kernel: request_mem_area: start: {:#x}, size: {:#x}, permission: {:#b}", start, size, permission);
             self.memory_set.insert_framed_area(start_va, end_va, permission);
             true
         }
