@@ -1,7 +1,7 @@
 //! Types related to task management & Functions for completely changing TCB
 use super::TaskContext;
 use super::{kstack_alloc, pid_alloc, KernelStack, PidHandle};
-use crate::config::TRAP_CONTEXT_BASE;
+use crate::config::{DEFAULT_PRIORITY, SCHEDULING_STRIDE, TRAP_CONTEXT_BASE};
 use crate::mm::{MapPermission, MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE};
 use crate::sync::UPSafeCell;
 use crate::trap::{trap_handler, TrapContext};
@@ -33,6 +33,27 @@ impl TaskControlBlock {
     pub fn get_user_token(&self) -> usize {
         let inner = self.inner_exclusive_access();
         inner.memory_set.token()
+    }
+}
+
+impl PartialEq for TaskControlBlock {
+    fn eq(&self, other: &Self) -> bool {
+        self.inner_exclusive_access().stride == other.inner_exclusive_access().stride
+    }
+}
+
+impl Eq for TaskControlBlock {}
+
+impl PartialOrd for TaskControlBlock {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+    
+}
+
+impl Ord for TaskControlBlock {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering { // 小的在前
+        other.inner_exclusive_access().stride.cmp(&self.inner_exclusive_access().stride)
     }
 }
 
@@ -68,6 +89,12 @@ pub struct TaskControlBlockInner {
 
     /// Program break
     pub program_brk: usize,
+
+    /// Priority of scheduling
+    pub priority: usize,
+
+    /// Stride of scheduling
+    pub stride: usize,
 }
 
 impl TaskControlBlockInner {
@@ -105,6 +132,16 @@ impl TaskControlBlockInner {
     pub fn delete_mem_area(&mut self, start: usize, size: usize) -> bool {
         return self.memory_set.unmap_area(VirtAddr::from(start).floor(), VirtAddr::from(start + size).ceil());
     }
+
+    /// set the priority of the process
+    pub fn set_priority(&mut self, priority: usize) {
+        self.priority = priority;
+    }
+
+    /// add stride
+    pub fn add_stride(&mut self) {
+        self.stride += SCHEDULING_STRIDE / self.priority;
+    }
 }
 
 impl TaskControlBlock {
@@ -138,6 +175,8 @@ impl TaskControlBlock {
                     exit_code: 0,
                     heap_bottom: user_sp,
                     program_brk: user_sp,
+                    priority: DEFAULT_PRIORITY,
+                    stride: 0,
                 })
             },
         };
@@ -211,6 +250,8 @@ impl TaskControlBlock {
                     exit_code: 0,
                     heap_bottom: parent_inner.heap_bottom,
                     program_brk: parent_inner.program_brk,
+                    priority: DEFAULT_PRIORITY,
+                    stride: 0,
                 })
             },
         });
@@ -224,6 +265,22 @@ impl TaskControlBlock {
         task_control_block
         // **** release child PCB
         // ---- release parent PCB
+    }
+
+    /// create a new child process with elf_data
+    pub fn spawn(self: &Arc<Self>, elf_data: &[u8]) -> Arc<Self> {
+        // ---- access parent PCB exclusively
+        let mut parent_inner = self.inner_exclusive_access();
+        // 获取子进程TCB
+        let tcb = Arc::new(TaskControlBlock::new(elf_data));
+        // 修改子进程的相关属性
+        let mut inner = tcb.inner_exclusive_access();
+        inner.parent = Some(Arc::downgrade(self));
+        inner.heap_bottom = parent_inner.heap_bottom;
+        inner.program_brk = parent_inner.program_brk;
+        drop(inner); // do not hold the lock
+        parent_inner.children.push(tcb.clone());
+        tcb
     }
 
     /// get pid of process
