@@ -318,6 +318,51 @@ impl MemorySet {
             false
         }
     }
+    
+    /// Get the area by virtual address range
+    pub fn get_area_by_range(
+        &self,
+        start: VirtAddr,
+        end: VirtAddr,
+    ) -> Option<&MapArea> {
+        let vr = VPNRange::new(start.floor(), end.ceil());
+        self.areas
+            .iter()
+            .find(|area| area.vpn_range.is_same(&vr))
+    }
+
+    /// Check if the area has the same start and end
+    pub fn has_same_area(&self, start: VirtAddr, end: VirtAddr) -> bool {
+        let vr = VPNRange::new(start.floor(), end.ceil());
+        self.areas
+            .iter()
+            .any(|area| area.vpn_range.is_same(&vr))
+    }
+
+    /// Check if any area overlaps with the given range
+    pub fn has_overlap(&self, start: VirtAddr, end: VirtAddr) -> bool {
+        let vr = VPNRange::new(start.floor(), end.ceil());
+        self.areas
+            .iter()
+            .any(|area| area.vpn_range.is_overlap(&vr))
+    }
+
+    /// Unmap the area by virtual address range
+    pub fn unmap_area(&mut self, start_vpn: VirtPageNum, end_vpn: VirtPageNum) -> bool {
+        let vr = VPNRange::new(start_vpn, end_vpn);
+        if let Some(index) = self
+            .areas
+            .iter_mut()
+            .position(|area| area.vpn_range.is_same(&vr))
+        {
+            let area = &mut self.areas[index];
+            area.unmap(&mut self.page_table);
+            self.areas.remove(index);
+            true
+        } else {
+            false
+        }
+    }
 }
 /// map area structure, controls a contiguous piece of virtual memory
 pub struct MapArea {

@@ -1,14 +1,16 @@
 //! Process management syscalls
 //!
+use core::{mem::size_of, slice::from_raw_parts};
+
 use alloc::sync::Arc;
 
 use crate::{
     fs::{open_file, OpenFlags},
-    mm::{translated_refmut, translated_str},
+    mm::{copy_buffer, translated_byte_buffer, translated_refmut, translated_str, VirtAddr},
     task::{
         add_task, current_task, current_user_token, exit_current_and_run_next,
         suspend_current_and_run_next,
-    },
+    }, timer::get_time_us,
 };
 
 #[repr(C)]
@@ -102,33 +104,60 @@ pub fn sys_waitpid(pid: isize, exit_code_ptr: *mut i32) -> isize {
     // ---- release current PCB automatically
 }
 
-/// YOUR JOB: get time with second and microsecond
-/// HINT: You might reimplement it with virtual memory management.
-/// HINT: What if [`TimeVal`] is splitted by two pages ?
-pub fn sys_get_time(_ts: *mut TimeVal, _tz: usize) -> isize {
+/// get time with second and microsecond
+pub fn sys_get_time(ts: *mut TimeVal, _tz: usize) -> isize {
     trace!(
-        "kernel:pid[{}] sys_get_time NOT IMPLEMENTED",
+        "kernel:pid[{}] sys_get_time",
         current_task().unwrap().pid.0
     );
-    -1
+    let token = current_user_token();
+    let size = size_of::<TimeVal>();
+    let tar_buffers = translated_byte_buffer(token, ts as usize as *const u8, size);
+ 
+    let us = get_time_us();
+    let (sec, usec) = (us / 1_000_000, us % 1_000_000);
+    let val = TimeVal {
+        sec,
+        usec,
+    };
+    let ori_buffers = unsafe { from_raw_parts(&val as *const _ as *const u8, size) };
+    copy_buffer(tar_buffers, ori_buffers, size);
+    0
 }
 
-/// YOUR JOB: Implement mmap.
-pub fn sys_mmap(_start: usize, _len: usize, _port: usize) -> isize {
+/// request physical memory of len bytes, map it to the vitural address of start, and the premission sets like port
+pub fn sys_mmap(start: usize, len: usize, port: usize) -> isize {
     trace!(
         "kernel:pid[{}] sys_mmap NOT IMPLEMENTED",
         current_task().unwrap().pid.0
     );
-    -1
+    if port & !0b111 != 0 || port & 0b111 == 0 { // 权限全为0无意义, 且其余位必须为0
+        return -1;
+    }
+    if !VirtAddr::from(start).aligned() { // start 未对齐
+        return -1;
+    }
+    if current_task().unwrap().inner_exclusive_access().request_mem_area(start, len, port) {
+        0
+    }else {
+        -1
+    }
 }
 
-/// YOUR JOB: Implement munmap.
-pub fn sys_munmap(_start: usize, _len: usize) -> isize {
+///  unmap the memory area of start and len bytes
+pub fn sys_munmap(start: usize, len: usize) -> isize {
     trace!(
         "kernel:pid[{}] sys_munmap NOT IMPLEMENTED",
         current_task().unwrap().pid.0
     );
-    -1
+    if !VirtAddr::from(start).aligned() { // start 未对齐
+        return -1;
+    }
+    if current_task().unwrap().inner_exclusive_access().delete_mem_area(start, len) {
+        0
+    } else {
+        -1
+    }
 }
 
 /// change data segment size
@@ -151,9 +180,10 @@ pub fn sys_spawn(path: *const u8) -> isize {
     );
     let token = current_user_token();
     let path = translated_str(token, path);
-    if let Some(data) = get_app_data_by_name(path.as_str()) {
+    if let Some(app_inode) = open_file(path.as_str(), OpenFlags::RDONLY) {
+        let data_vec = app_inode.read_all();
         let current_task = current_task().unwrap();
-        let new_task = current_task.spawn(data);
+        let new_task = current_task.spawn(data_vec.as_slice());
         let new_pid = new_task.pid.0;
         // 更改子进程的trap context，因为它在切换后会立即返回
         let trap_cx = new_task.inner_exclusive_access().get_trap_cx();

@@ -218,6 +218,24 @@ pub fn translated_refmut<T>(token: usize, ptr: *mut T) -> &'static mut T {
         .unwrap()
         .get_mut()
 }
+ 
+/// Copy data from src to dst, considering the situation that dst on multiple pages
+pub fn copy_buffer(
+    dst: Vec<&mut [u8]>,
+    src: &[u8],
+    len: usize
+) -> usize {
+    let mut writen_len = 0;
+    for ele in dst {
+        let wlen = ele.len().min(len - writen_len);
+        if wlen == 0 {
+            break;
+        }
+        ele[..wlen].copy_from_slice(&src[writen_len..writen_len + wlen]);
+        writen_len += wlen;
+    }
+    writen_len
+}
 
 /// An abstraction over a buffer passed from user space to kernel space
 pub struct UserBuffer {

@@ -41,6 +41,8 @@ pub fn suspend_current_and_run_next() {
     // There must be an application running.
     let task = take_current_task().unwrap();
 
+    task.inner_exclusive_access().add_stride();
+
     // ---- access current TCB exclusively
     let mut task_inner = task.inner_exclusive_access();
     let task_cx_ptr = &mut task_inner.task_cx as *mut TaskContext;
@@ -62,6 +64,8 @@ pub const IDLE_PID: usize = 0;
 pub fn exit_current_and_run_next(exit_code: i32) {
     // take from Processor
     let task = take_current_task().unwrap();
+
+    task.inner_exclusive_access().add_stride();
 
     let pid = task.getpid();
     if pid == IDLE_PID {
