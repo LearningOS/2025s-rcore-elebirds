@@ -155,6 +155,11 @@ impl Inode {
             v
         })
     }
+    /// is_dir 
+    pub fn is_dir(&self) -> bool {
+        let _fs = self.fs.lock();
+        self.read_disk_inode(|disk_inode| disk_inode.is_dir())
+    }
     /// Read data from current inode
     pub fn read_at(&self, offset: usize, buf: &mut [u8]) -> usize {
         let _fs = self.fs.lock();
@@ -183,4 +188,114 @@ impl Inode {
         });
         block_cache_sync_all();
     }
+    /// get inode_id
+    pub fn get_inode_id(&self) -> u32 {
+        let fs = self.fs.lock();
+        fs.get_inode_id(self.block_id as u32, self.block_offset)
+    }
+    /// Increase link count
+    pub fn increase_link(&self) {
+        let _fs = self.fs.lock();
+        self.modify_disk_inode(|disk_inode| {
+            disk_inode.increase_link();
+        });
+    }
+    /// Decrease link count
+    pub fn decrease_link(&self) {
+        let _fs = self.fs.lock();
+        self.modify_disk_inode(|disk_inode| {
+            disk_inode.decrease_link();
+        });
+    }
+    /// Get the link count
+    pub fn get_link_count(&self) -> u32 {
+        let _fs = self.fs.lock();
+        self.read_disk_inode(|disk_inode| disk_inode.get_link_count())
+    }
+    /// Link file
+    pub fn link_to(&self, source: &str, target: &str) -> bool{
+        if source == target {
+            return false;
+        }
+        log::debug!("linking {} to {}", source, target);
+        let real_inode = self.find(source);
+        if real_inode.is_none() {
+            return false;
+        }
+        let real_inode = real_inode.unwrap();
+        log::debug!("got real inode");
+        let inode_id = real_inode.get_inode_id();
+        log::debug!("got real inode id");
+        real_inode.increase_link();
+        log::debug!("increase_link");
+        let mut fs = self.fs.lock();
+        self.modify_disk_inode(|disk_inode| {
+            // assert it is a directory
+            assert!(disk_inode.is_dir());
+            // append file in the dirent
+            let file_count = (disk_inode.size as usize) / DIRENT_SZ;
+            let new_size = (file_count + 1) * DIRENT_SZ;
+            // increase size
+            self.increase_size(new_size as u32, disk_inode, &mut fs);
+            // write dirent
+            let dirent = DirEntry::new(target, inode_id);
+            disk_inode.write_at(
+                file_count * DIRENT_SZ,
+                dirent.as_bytes(),
+                &self.block_device,
+            );
+        });
+        true
+    }
+    /// Unlink file
+    pub fn unlink_at(&self, path: &str) -> bool {
+        log::debug!("unlinking {}", path);
+        let real_inode = self.find(path);
+        if real_inode.is_none() {
+            return false;
+        }
+        let real_inode = real_inode.unwrap();
+        log::debug!("got real inode");
+        let mut found = false;
+        let fs = self.fs.lock();
+        // 修改目录项
+        self.modify_disk_inode(|dir_inode| {
+            // assert it is a directory
+            assert!(dir_inode.is_dir());
+            let file_count = (dir_inode.size as usize) / DIRENT_SZ;
+            let mut remains = Vec::new();
+            let mut dirent = DirEntry::empty();
+            for i in 0..file_count {
+                assert_eq!(
+                    dir_inode.read_at(i * DIRENT_SZ, dirent.as_bytes_mut(), &self.block_device,),
+                    DIRENT_SZ,
+                );
+                if dirent.name() != path {
+                    remains.push(dirent);
+                } else {
+                    found = true;
+                }
+            }
+            if found {
+                dir_inode.size = (remains.len() * DIRENT_SZ) as u32;
+                for (i, entry) in remains.iter().enumerate() {
+                    dir_inode.write_at(i * DIRENT_SZ, entry.as_bytes(), &self.block_device);
+                }
+            }
+        });
+        log::debug!("modified dir_inode");
+        if !found {
+            return false;
+        }
+        drop(fs);
+        log::debug!("found file");
+        real_inode.decrease_link();
+        log::debug!("decrease_link");
+        if real_inode.get_link_count() == 0 {
+            log::debug!("deallocating inode");
+            real_inode.clear();
+        }
+        true
+    }
+
 }

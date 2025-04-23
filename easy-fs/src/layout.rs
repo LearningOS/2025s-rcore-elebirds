@@ -6,7 +6,7 @@ use core::fmt::{Debug, Formatter, Result};
 /// Magic number for sanity check
 const EFS_MAGIC: u32 = 0x3b800001;
 /// The max number of direct inodes
-const INODE_DIRECT_COUNT: usize = 28;
+const INODE_DIRECT_COUNT: usize = 27;
 /// The max length of inode name
 const NAME_LENGTH_LIMIT: usize = 27;
 /// The max number of indirect1 inodes
@@ -85,6 +85,7 @@ pub struct DiskInode {
     pub direct: [u32; INODE_DIRECT_COUNT],
     pub indirect1: u32,
     pub indirect2: u32,
+    pub link_count: u32,
     type_: DiskInodeType,
 }
 
@@ -96,6 +97,7 @@ impl DiskInode {
         self.direct.iter_mut().for_each(|v| *v = 0);
         self.indirect1 = 0;
         self.indirect2 = 0;
+        self.link_count = 1; // itself
         self.type_ = type_;
     }
     /// Whether this inode is a directory
@@ -113,6 +115,21 @@ impl DiskInode {
     }
     fn _data_blocks(size: u32) -> u32 {
         (size + BLOCK_SZ as u32 - 1) / BLOCK_SZ as u32
+    }
+    /// Increase link count
+    pub fn increase_link(&mut self) -> u32 {
+        self.link_count += 1;
+        self.link_count
+    }
+    /// Decrease link count
+    pub fn decrease_link(&mut self) -> u32 {
+        assert!(self.link_count > 0);
+        self.link_count -= 1;
+        self.link_count
+    }
+    /// Get link count
+    pub fn get_link_count(&self) -> u32 {
+        self.link_count
     }
     /// Return number of blocks needed include indirect1/2.
     pub fn total_blocks(size: u32) -> u32 {
@@ -390,6 +407,7 @@ impl DiskInode {
 }
 /// A directory entry
 #[repr(C)]
+#[derive(Clone, Copy)]
 pub struct DirEntry {
     name: [u8; NAME_LENGTH_LIMIT + 1],
     inode_id: u32,
