@@ -1,13 +1,15 @@
 //! Mutex (spin-like and blocking(sleep))
 
-use super::UPSafeCell;
+use super::{Detectable, UPSafeCell};
 use crate::task::TaskControlBlock;
 use crate::task::{block_current_and_run_next, suspend_current_and_run_next};
 use crate::task::{current_task, wakeup_task};
+use alloc::vec::Vec;
+use alloc::vec;
 use alloc::{collections::VecDeque, sync::Arc};
 
 /// Mutex trait
-pub trait Mutex: Sync + Send {
+pub trait Mutex: Sync + Send + Detectable {
     /// Lock the mutex
     fn lock(&self);
     /// Unlock the mutex
@@ -16,14 +18,24 @@ pub trait Mutex: Sync + Send {
 
 /// Spinlock Mutex struct
 pub struct MutexSpin {
-    locked: UPSafeCell<bool>,
+    inner: UPSafeCell<MutexSpinInner>,
 }
 
-impl MutexSpin {
+pub struct MutexSpinInner {
+    locked: bool,
+    allocated: Option<usize>,
+}
+
+impl MutexSpin { // 互斥锁
     /// Create a new spinlock mutex
     pub fn new() -> Self {
         Self {
-            locked: unsafe { UPSafeCell::new(false) },
+            inner: unsafe {
+                UPSafeCell::new(MutexSpinInner {
+                    locked: false,
+                    allocated: None,
+                })
+            },
         }
     }
 }
@@ -33,13 +45,14 @@ impl Mutex for MutexSpin {
     fn lock(&self) {
         trace!("kernel: MutexSpin::lock");
         loop {
-            let mut locked = self.locked.exclusive_access();
-            if *locked {
-                drop(locked);
+            let mut inner = self.inner.exclusive_access();
+            if inner.locked {
+                drop(inner);
                 suspend_current_and_run_next();
                 continue;
             } else {
-                *locked = true;
+                inner.allocated = Some(current_task().unwrap().get_id());
+                inner.locked = true;
                 return;
             }
         }
@@ -47,8 +60,33 @@ impl Mutex for MutexSpin {
 
     fn unlock(&self) {
         trace!("kernel: MutexSpin::unlock");
-        let mut locked = self.locked.exclusive_access();
-        *locked = false;
+        self.inner.exclusive_access().locked = false;
+    }
+}
+
+impl Detectable for MutexSpin {
+    /// 锁资源可用数量
+    fn get_avaliable(&self) -> usize {
+        if self.inner.exclusive_access().locked {
+            0
+        } else {
+            1
+        }
+    }
+
+    /// 锁资源持有者
+    fn get_allocated(&self) -> Option<Vec<usize>> {
+        let inner = self.inner.exclusive_access();
+        if inner.locked {
+            Some(vec![inner.allocated.unwrap()])
+        } else {
+            None
+        }
+    }
+
+    /// 锁资源申请者，由于在锁定状态下申请会直接yield，没有等待中的申请者
+    fn get_needed(&self) -> Option<Vec<usize>> { 
+        None
     }
 }
 
@@ -60,9 +98,10 @@ pub struct MutexBlocking {
 pub struct MutexBlockingInner {
     locked: bool,
     wait_queue: VecDeque<Arc<TaskControlBlock>>,
+    allocated: Option<usize>,
 }
 
-impl MutexBlocking {
+impl MutexBlocking { // 阻塞锁
     /// Create a new blocking mutex
     pub fn new() -> Self {
         trace!("kernel: MutexBlocking::new");
@@ -71,6 +110,7 @@ impl MutexBlocking {
                 UPSafeCell::new(MutexBlockingInner {
                     locked: false,
                     wait_queue: VecDeque::new(),
+                    allocated: None,
                 })
             },
         }
@@ -87,6 +127,7 @@ impl Mutex for MutexBlocking {
             drop(mutex_inner);
             block_current_and_run_next();
         } else {
+            mutex_inner.allocated = Some(current_task().unwrap().get_id());
             mutex_inner.locked = true;
         }
     }
@@ -100,6 +141,37 @@ impl Mutex for MutexBlocking {
             wakeup_task(waking_task);
         } else {
             mutex_inner.locked = false;
+        }
+    }
+}
+
+impl Detectable for MutexBlocking {
+    /// 锁资源可用数量
+    fn get_avaliable(&self) -> usize {
+        if self.inner.exclusive_access().locked {
+            0
+        } else {
+            1
+        }
+    }
+
+    /// 锁资源持有者
+    fn get_allocated(&self) -> Option<Vec<usize>> {
+        let inner = self.inner.exclusive_access();
+        if inner.locked {
+            Some(vec![inner.allocated.unwrap()])
+        } else {
+            None
+        }
+    }
+
+    /// 锁资源申请者
+    fn get_needed(&self) -> Option<Vec<usize>> { 
+        let inner = self.inner.exclusive_access();
+        if inner.locked {
+            Some(inner.wait_queue.iter().map(|task| task.get_id()).collect())
+        } else {
+            None
         }
     }
 }

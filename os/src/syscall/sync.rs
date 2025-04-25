@@ -1,7 +1,8 @@
-use crate::sync::{Condvar, Mutex, MutexBlocking, MutexSpin, Semaphore};
+use crate::sync::{detect, Condvar, Detectable, Mutex, MutexBlocking, MutexSpin, Semaphore};
 use crate::task::{block_current_and_run_next, current_process, current_task};
 use crate::timer::{add_timer, get_time_ms};
 use alloc::sync::Arc;
+use alloc::vec::Vec;
 /// sleep syscall
 pub fn sys_sleep(ms: usize) -> isize {
     trace!(
@@ -70,6 +71,16 @@ pub fn sys_mutex_lock(mutex_id: usize) -> isize {
     );
     let process = current_process();
     let process_inner = process.inner_exclusive_access();
+    if process_inner.deadlock_detection && detect(
+        process_inner.mutex_list.iter().filter_map(|p| {
+            p.as_ref().map(|mutex| { mutex.clone() as Arc<dyn Detectable> })
+        }).collect::<Vec<_>>(),
+        process_inner.tasks.len(), 
+        |_available, _allocated, needed| {
+            needed[current_task().unwrap().get_id()][mutex_id] += 1;
+    }) {
+        return -0xDEAD;
+    }
     let mutex = Arc::clone(process_inner.mutex_list[mutex_id].as_ref().unwrap());
     drop(process_inner);
     drop(process);
@@ -164,6 +175,16 @@ pub fn sys_semaphore_down(sem_id: usize) -> isize {
     );
     let process = current_process();
     let process_inner = process.inner_exclusive_access();
+    if process_inner.deadlock_detection && detect(
+        process_inner.semaphore_list.iter().filter_map(|p| {
+            p.as_ref().map(|sem| { sem.clone() as Arc<dyn Detectable> })
+        }).collect::<Vec<_>>(),
+        process_inner.tasks.len(), 
+        |_available, _allocated, needed| {
+            needed[current_task().unwrap().get_id()][sem_id] += 1;
+    }) {
+        return -0xDEAD;
+    }
     let sem = Arc::clone(process_inner.semaphore_list[sem_id].as_ref().unwrap());
     drop(process_inner);
     sem.down();

@@ -24,6 +24,7 @@
 #![no_main]
 #![feature(panic_info_message)]
 #![feature(alloc_error_handler)]
+#![feature(trait_upcasting)]
 
 #[macro_use]
 extern crate log;
