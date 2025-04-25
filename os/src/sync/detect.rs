@@ -22,6 +22,7 @@ pub trait Detectable {
 /// Detect the deadlock for a bunch of Detectable resources
 pub fn detect(detectables: Vec<Arc<dyn Detectable>>, num_task: usize, mut adjust: impl FnMut(&mut Vec<usize>, &mut Vec<Vec<usize>>, &mut Vec<Vec<usize>>) -> ()) -> bool
 {
+    debug!("kernel: detect deadlock");
     let num_resource = detectables.len();
     if num_resource == 0 { // 如果没有可检测的对象，直接true，即可用
         return true;
@@ -42,10 +43,15 @@ pub fn detect(detectables: Vec<Arc<dyn Detectable>>, num_task: usize, mut adjust
             }
         }
     }
+    debug!("[detect deadlock] num_resource: {}, num_task: {}", num_resource, num_task);
+    debug!("[detect deadlock] available: {:?}", available);
+    debug!("[detect deadlock] allocated: {:?}", allocated);
+    debug!("[detect deadlock] needed: {:?}", needed);
     // 修正资源分配矩阵和需求矩阵(当前申请的资源需求数需要+1)
     adjust(&mut available, &mut allocated, &mut needed);
+    debug!("[detect deadlock] fixed needed: {:?}", needed);
     // 调用伪银行家算法检测死锁
-    pseudo_bankers_algorithm(&mut available, &mut allocated, &mut needed)
+    !pseudo_bankers_algorithm(&mut available, &mut allocated, &mut needed)
 }
 
 /// (伪)银行家算法, 用于检测死锁
@@ -60,14 +66,21 @@ fn pseudo_bankers_algorithm(
     let num_task = allocated.len();
     let mut finish = vec![false; num_task];
     let mut work = available.clone();
+    debug!("[bankers algorithm] available: {:?}", available);
+    debug!("[bankers algorithm] allocated: {:?}", allocated);
+    debug!("[bankers algorithm] needed: {:?}", needed);
+    debug!("[bankers algorithm] finish: {:?}", finish);
+    debug!("[bankers algorithm] work: {:?}", work);
 
     loop {
         let mut found = false;
         for i in 0..num_task {
             if !finish[i] && needed[i].iter().zip(work.iter()).all(|(n, w)| n <= w) {
+                debug!("[bankers algorithm] task {} can finish", i);
                 for j in 0..num_resource {
                     work[j] += allocated[i][j];
                 }
+                debug!("[bankers algorithm] now, work: {:?}", work);
                 finish[i] = true;
                 found = true;
             }
@@ -76,6 +89,6 @@ fn pseudo_bankers_algorithm(
             break;
         }
     }
-
+    debug!("[bankers algorithm] finish: {:?}", finish);
     finish.iter().all(|&f| f)
 }
